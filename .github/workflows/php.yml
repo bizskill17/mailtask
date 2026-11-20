@@ -1,0 +1,16 @@
+name: Phase 1 PHP tests
+on: [push, pull_request, workflow_dispatch]
+permissions:
+  contents: read
+jobs:
+  fixtures:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Check PHP syntax
+        run: find app config cron public tests -type f -name '*.php' -print0 | xargs -0 -n1 php -l
+      - name: Run Gmail fixture tests
+        run: php tests/gmail.php
