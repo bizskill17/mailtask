@@ -1,0 +1,122 @@
+name: Deploy MailTask to Hostinger
+
+on:
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: 'Upload files (leave unchecked to test the FTPS connection)'
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mailtask-hostinger
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Check PHP syntax and Gmail fixtures
+        run: |
+          find app config cron public tests -type f -name '*.php' -print0 | xargs -0 -n1 php -l
+          php tests/gmail.php
+      - name: Verify connection or upload over FTPS
+        env:
+          FTP_HOST: ${{ secrets.HOSTINGER_FTP_HOST }}
+          FTP_USER: ${{ secrets.HOSTINGER_FTP_USERNAME }}
+          FTP_PASSWORD: ${{ secrets.HOSTINGER_FTP_PASSWORD }}
+          SITE_ROOT: ${{ vars.HOSTINGER_FTP_SITE_ROOT }}
+          PUBLISH: ${{ inputs.publish }}
+        run: |
+          python3 - <<'PY'
+          import os
+          import re
+          import ssl
+          from ftplib import FTP_TLS, all_errors, error_perm
+          from pathlib import Path
+          from uuid import uuid4
+
+          host, user, password, root = (
+              os.environ[key] for key in ('FTP_HOST', 'FTP_USER', 'FTP_PASSWORD', 'SITE_ROOT')
+          )
+          if not all((host, user, password, root)):
+              raise SystemExit('Set the three Hostinger FTP secrets and the site root variable.')
+          if not re.fullmatch(r'[A-Za-z0-9.-]+', host):
+              raise SystemExit('Use the Hostinger server hostname without a scheme or port.')
+          if not re.fullmatch(r'/(?:[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)*)?/?', root) or any(
+              part in ('.', '..', 'public_html') for part in root.split('/')
+          ):
+              raise SystemExit('Use the FTP path of the site directory containing public_html.')
+          root = root.rstrip('/')
+          public = root + '/public_html'
+          private = root + '/mailtask-private'
+
+          def ensure_directory(ftp, path):
+              try:
+                  ftp.cwd(path)
+              except error_perm as error:
+                  if not str(error).startswith('550'):
+                      raise
+                  ftp.mkd(path)
+                  ftp.cwd(path)
+
+          def upload(ftp, source, directory, name):
+              temporary = '.mailtask-' + uuid4().hex
+              ftp.cwd(directory)
+              try:
+                  with source.open('rb') as stream:
+                      ftp.storbinary('STOR ' + temporary, stream)
+                  ftp.rename(temporary, name)
+              except all_errors:
+                  try:
+                      ftp.delete(temporary)
+                  except all_errors:
+                      pass
+                  raise
+
+          step = 'FTPS login'
+          try:
+              with FTP_TLS(context=ssl.create_default_context(), timeout=25) as ftp:
+                  ftp.connect(host, 21)
+                  ftp.login(user, password)
+                  ftp.prot_p()
+                  step = 'checking the site document root'
+                  ftp.cwd(public)
+                  ftp.nlst()
+                  print('FTPS login and public_html listing succeeded.')
+                  if os.environ['PUBLISH'] != 'true':
+                      print('Connection test completed without uploading files.')
+                  else:
+                      step = 'uploading private PHP files'
+                      ensure_directory(ftp, private)
+                      for folder in ('app', 'cron', 'config', 'storage', 'storage/logs', 'storage/secrets'):
+                          ensure_directory(ftp, private + '/' + folder)
+
+                      sources = sorted(Path('app').rglob('*.php'))
+                      sources += sorted(Path('cron').glob('*.php'))
+                      sources.append(Path('config/config.sample.php'))
+                      for source in sources:
+                          directory = private
+                          for part in source.parent.parts:
+                              directory += '/' + part
+                              ensure_directory(ftp, directory)
+                          upload(ftp, source, directory, source.name)
+
+                      step = 'uploading the public entry point'
+                      # Phase 1 uses a public placeholder. Only explicitly listed public files are published.
+                      for name in ('.htaccess', 'index.php'):
+                          upload(ftp, Path('public') / name, public, name)
+                      print('MailTask Phase 1 files uploaded.')
+          except ssl.SSLCertVerificationError:
+              raise SystemExit('FTPS certificate verification failed. Use the certificate-matching Hostinger server hostname.')
+          except all_errors as error:
+              raise SystemExit(f'Deployment stopped while {step} ({type(error).__name__}).')
+          PY
