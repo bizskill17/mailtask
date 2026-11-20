@@ -1,0 +1,5 @@
+/config/config.php
+/storage/secrets/*
+!/storage/secrets/.keep
+/storage/logs/*
+!/storage/logs/.keep
