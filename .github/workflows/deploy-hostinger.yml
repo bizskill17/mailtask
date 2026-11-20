@@ -33,7 +33,7 @@ jobs:
           FTP_HOST: ${{ secrets.HOSTINGER_FTP_HOST }}
           FTP_USER: ${{ secrets.HOSTINGER_FTP_USERNAME }}
           FTP_PASSWORD: ${{ secrets.HOSTINGER_FTP_PASSWORD }}
-          SITE_ROOT: ${{ vars.HOSTINGER_FTP_SITE_ROOT }}
+          SITE_ROOT: ${{ vars.HOSTINGER_FTP_SITE_ROOT || '/' }}
           PUBLISH: ${{ inputs.publish }}
         run: |
           python3 - <<'PY'
@@ -48,7 +48,7 @@ jobs:
               os.environ[key] for key in ('FTP_HOST', 'FTP_USER', 'FTP_PASSWORD', 'SITE_ROOT')
           )
           if not all((host, user, password, root)):
-              raise SystemExit('Set the three Hostinger FTP secrets and the site root variable.')
+              raise SystemExit('Set HOSTINGER_FTP_HOST, HOSTINGER_FTP_USERNAME, and HOSTINGER_FTP_PASSWORD in GitHub Actions secrets.')
           if not re.fullmatch(r'[A-Za-z0-9.-]+', host):
               raise SystemExit('Use the Hostinger server hostname without a scheme or port.')
           if not re.fullmatch(r'/(?:[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)*)?/?', root) or any(
