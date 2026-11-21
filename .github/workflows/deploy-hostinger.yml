@@ -1,6 +1,9 @@
 name: Deploy MailTask to Hostinger
 
 on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/deploy-hostinger.yml']
   workflow_dispatch:
     inputs:
       publish:
@@ -30,11 +33,12 @@ jobs:
           php tests/gmail.php
       - name: Verify connection or upload over FTPS
         env:
-          FTP_HOST: ${{ secrets.HOSTINGER_FTP_HOST }}
+          FTP_HOST: '147.93.92.210'
+          FTP_TLS_NAME: 'hstgr.io'
           FTP_USER: ${{ secrets.HOSTINGER_FTP_USERNAME }}
           FTP_PASSWORD: ${{ secrets.HOSTINGER_FTP_PASSWORD }}
           SITE_ROOT: ${{ vars.HOSTINGER_FTP_SITE_ROOT || '/' }}
-          PUBLISH: ${{ inputs.publish }}
+          PUBLISH: ${{ github.event_name == 'workflow_dispatch' && inputs.publish == true }}
         run: |
           python3 - <<'PY'
           import errno
@@ -51,7 +55,7 @@ jobs:
               os.environ[key] for key in ('FTP_HOST', 'FTP_USER', 'FTP_PASSWORD', 'SITE_ROOT')
           )
           if not all((host, user, password, root)):
-              raise SystemExit('Set HOSTINGER_FTP_HOST, HOSTINGER_FTP_USERNAME, and HOSTINGER_FTP_PASSWORD in GitHub Actions secrets.')
+              raise SystemExit('Set HOSTINGER_FTP_USERNAME and HOSTINGER_FTP_PASSWORD in GitHub Actions secrets.')
           if not re.fullmatch(r'[A-Za-z0-9.-]+', host):
               raise SystemExit('Use the Hostinger server hostname without a scheme or port.')
           if not re.fullmatch(r'/(?:[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)*)?/?', root) or any(
@@ -116,6 +120,8 @@ jobs:
               with FTP_TLS(context=ssl.create_default_context(), timeout=25) as ftp:
                   ftp.connect(host, 21)
                   step = 'negotiating explicit TLS on port 21'
+                  # The account IP is the transport endpoint. Verify the Hostinger TLS identity separately.
+                  ftp.host = os.environ['FTP_TLS_NAME']
                   ftp.auth()
                   step = 'authenticating the FTP username and password'
                   ftp.login(user, password)
@@ -153,7 +159,7 @@ jobs:
                   report_certificate_names()
               raise SystemExit(f'FTPS certificate verification failed (code {error.verify_code}). Use the certificate-matching Hostinger server hostname.')
           except socket.gaierror:
-              raise SystemExit('Cannot resolve HOSTINGER_FTP_HOST in DNS.')
+              raise SystemExit('Cannot resolve the configured FTP endpoint.')
           except TimeoutError:
               raise SystemExit(f'Timed out while {step}.')
           except OSError as error:
