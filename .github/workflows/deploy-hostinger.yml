@@ -42,6 +42,7 @@ jobs:
           import socket
           import re
           import ssl
+          import subprocess
           from ftplib import FTP_TLS, all_errors, error_perm
           from pathlib import Path
           from uuid import uuid4
@@ -84,6 +85,32 @@ jobs:
                       pass
                   raise
 
+          def report_certificate_names():
+              # Inspect the public certificate before login. Never use these names as trusted input.
+              try:
+                  handshake = subprocess.run(
+                      ['openssl', 's_client', '-starttls', 'ftp', '-connect', f'{host}:21',
+                       '-servername', host, '-showcerts'],
+                      input=b'', capture_output=True, timeout=12, check=False,
+                  )
+                  certificate = re.search(
+                      rb'-----BEGIN CERTIFICATE-----.*?-----END CERTIFICATE-----',
+                      handshake.stdout, re.DOTALL,
+                  )
+                  if certificate is None:
+                      print('Could not retrieve the FTPS peer certificate for inspection.')
+                      return
+                  details = subprocess.run(
+                      ['openssl', 'x509', '-noout', '-subject', '-ext', 'subjectAltName'],
+                      input=certificate.group(), capture_output=True, timeout=5, check=True,
+                  ).stdout.decode('utf-8', errors='replace')
+                  names = re.findall(r'DNS:([*A-Za-z0-9.-]+)', details)
+                  if not names:
+                      names = re.findall(r'\\bCN\\s*=\\s*([*A-Za-z0-9.-]+)', details)
+                  print('FTPS certificate DNS names: ' + (', '.join(names) if names else '(none found)'))
+              except (OSError, subprocess.SubprocessError):
+                  print('Could not inspect the FTPS peer certificate.')
+
           step = 'connecting to the FTP server on port 21'
           try:
               with FTP_TLS(context=ssl.create_default_context(), timeout=25) as ftp:
@@ -122,6 +149,8 @@ jobs:
                           upload(ftp, Path('public') / name, public, name)
                       print('MailTask Phase 1 files uploaded.')
           except ssl.SSLCertVerificationError as error:
+              if error.verify_code == 62:
+                  report_certificate_names()
               raise SystemExit(f'FTPS certificate verification failed (code {error.verify_code}). Use the certificate-matching Hostinger server hostname.')
           except socket.gaierror:
               raise SystemExit('Cannot resolve HOSTINGER_FTP_HOST in DNS.')
