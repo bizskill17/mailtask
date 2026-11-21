@@ -37,7 +37,9 @@ jobs:
           PUBLISH: ${{ inputs.publish }}
         run: |
           python3 - <<'PY'
+          import errno
           import os
+          import socket
           import re
           import ssl
           from ftplib import FTP_TLS, all_errors, error_perm
@@ -82,11 +84,15 @@ jobs:
                       pass
                   raise
 
-          step = 'FTPS login'
+          step = 'connecting to the FTP server on port 21'
           try:
               with FTP_TLS(context=ssl.create_default_context(), timeout=25) as ftp:
                   ftp.connect(host, 21)
+                  step = 'negotiating explicit TLS on port 21'
+                  ftp.auth()
+                  step = 'authenticating the FTP username and password'
                   ftp.login(user, password)
+                  step = 'enabling TLS for data transfers'
                   ftp.prot_p()
                   step = 'checking the site document root'
                   ftp.cwd(public)
@@ -115,8 +121,17 @@ jobs:
                       for name in ('.htaccess', 'index.php'):
                           upload(ftp, Path('public') / name, public, name)
                       print('MailTask Phase 1 files uploaded.')
-          except ssl.SSLCertVerificationError:
-              raise SystemExit('FTPS certificate verification failed. Use the certificate-matching Hostinger server hostname.')
+          except ssl.SSLCertVerificationError as error:
+              raise SystemExit(f'FTPS certificate verification failed (code {error.verify_code}). Use the certificate-matching Hostinger server hostname.')
+          except socket.gaierror:
+              raise SystemExit('Cannot resolve HOSTINGER_FTP_HOST in DNS.')
+          except TimeoutError:
+              raise SystemExit(f'Timed out while {step}.')
+          except OSError as error:
+              code = errno.errorcode.get(error.errno, 'unknown')
+              raise SystemExit(f'Deployment stopped while {step} ({type(error).__name__}, {code}).')
           except all_errors as error:
-              raise SystemExit(f'Deployment stopped while {step} ({type(error).__name__}).')
+              response = str(error)[:3]
+              code = f', FTP {response}' if response.isascii() and response.isdecimal() else ''
+              raise SystemExit(f'Deployment stopped while {step} ({type(error).__name__}{code}).')
           PY
