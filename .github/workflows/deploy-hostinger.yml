@@ -1,9 +1,6 @@
 name: Deploy MailTask to Hostinger
 
 on:
-  push:
-    branches: [main]
-    paths: ['.github/workflows/deploy-hostinger.yml']
   workflow_dispatch:
     inputs:
       publish:
